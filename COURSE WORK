@@ -1,0 +1,232 @@
+import javax.swing.*;
+import javax.swing.table.DefaultTableModel;
+import java.awt.*;
+import java.sql.*;
+import java.time.LocalDate;
+
+public class SmartCampusSystem extends JFrame {
+    // ===== DATABASE CONFIG 
+    static final String DB_URL = "jdbc:
+    // createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true";
+    static final String DB_USER = "root";
+    static final String DB_PASS = ""; 
+
+    Connection conn;
+    String loggedUserRole = "";
+    String loggedUsername = "";
+    int loggedStudentId = -1;
+
+    // UI Components
+    CardLayout cardLayout = new CardLayout();
+    JPanel mainPanel = new JPanel(cardLayout);
+    JPanel loginPanel, adminPanel, lecturerPanel, studentPanel;
+
+    // Constructor
+    public SmartCampusSystem() {
+        setTitle("Smart Campus Student Management System - UICT");
+        setSize(1000, 650);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setLocationRelativeTo(null);
+
+        try {
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASS);
+            createTablesAndDefaultData();
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "Database Error: " + e.getMessage() 
+            + "\nMake sure MySQL is running and DB 'smartcampus' exists");
+            System.exit(0);
+        }
+
+        initLoginUI();
+        initAdminUI();
+        initLecturerUI();
+        initStudentUI();
+
+        mainPanel.add(loginPanel, "LOGIN");
+        mainPanel.add(adminPanel, "ADMIN");
+        mainPanel.add(lecturerPanel, "LECTURER");
+        mainPanel.add(studentPanel, "STUDENT");
+        add(mainPanel);
+        cardLayout.show(mainPanel, "LOGIN");
+    }
+
+    // ===== CREATE ALL TABLES =====
+    void createTablesAndDefaultData() throws SQLException {
+        Statement st = conn.createStatement();
+        st.execute("CREATE TABLE IF NOT EXISTS users(id INT AUTO_INCREMENT PRIMARY KEY, 
+        username VARCHAR(50) UNIQUE, password VARCHAR(50), role VARCHAR(20))");
+        st.execute("CREATE TABLE IF NOT EXISTS departments(id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100))");
+        st.execute("CREATE TABLE IF NOT EXISTS programs(id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100), dept_id INT)");
+        st.execute("CREATE TABLE IF NOT EXISTS students(id INT AUTO_INCREMENT PRIMARY KEY, 
+        regNo VARCHAR(30) UNIQUE, fullName VARCHAR(100), username VARCHAR(50), program VARCHAR(100))");
+        st.execute("CREATE TABLE IF NOT EXISTS courses(id INT AUTO_INCREMENT PRIMARY KEY, 
+        code VARCHAR(20) UNIQUE, name VARCHAR(100), lecturer VARCHAR(50))");
+        st.execute("CREATE TABLE IF NOT EXISTS results(id INT AUTO_INCREMENT PRIMARY KEY, 
+        student_id INT, course_code VARCHAR(20), coursework DOUBLE, exam DOUBLE, total DOUBLE, grade VARCHAR(2), gpa DOUBLE)");
+        st.execute("CREATE TABLE IF NOT EXISTS attendance(id INT AUTO_INCREMENT PRIMARY KEY, student_id INT,
+         course_code VARCHAR(20), date DATE, status VARCHAR(10))");
+
+        // Default Data if empty
+        ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM users");
+        rs.next();
+        if (rs.getInt(1) == 0) {
+            st.executeUpdate("INSERT INTO users(username,password,role) VALUES('admin','admin123','ADMIN')");
+            st.executeUpdate("INSERT INTO users(username,password,role) VALUES('lecturer1','lect123','LECTURER')");
+            st.executeUpdate("INSERT INTO users(username,password,role) VALUES('student1','stud123','STUDENT')");
+            st.executeUpdate("INSERT INTO departments(name) VALUES('Computer Science'),('Business')");
+            st.executeUpdate("INSERT INTO programs(name,dept_id) VALUES('BCS',1),('BIT',1)");
+            st.executeUpdate("INSERT INTO students(regNo,fullName,username,program) VALUES('2025/DCS/DAY/0139','BEGUMISA HENRY','student1','DCS')");
+            st.executeUpdate("INSERT INTO courses(code,name,lecturer) VALUES('CS101','Java Programming','lecturer1'),
+            ('CS102','Database Systems','lecturer1')");
+        }
+    }
+
+    // ===== LOGIN UI =====
+    void initLoginUI() {
+        loginPanel = new JPanel(new GridBagLayout());
+        loginPanel.setBackground(new Color(240, 248, 255));
+        JPanel box = new JPanel(new GridLayout(5, 1, 10, 10));
+        box.setBorder(BorderFactory.createTitledBorder("Smart Campus Login"));
+        JTextField userField = new JTextField(); JPasswordField passField = new JPasswordField();
+        JButton loginBtn = new JButton("LOGIN");
+        box.add(new JLabel("Username:")); box.add(userField); box.add(new JLabel("Password:")); box.add(passField); box.add(loginBtn);
+        loginPanel.add(box);
+
+        loginBtn.addActionListener(e -> {
+            String u = userField.getText().trim(); String p = new String(passField.getPassword()).trim();
+            try {
+                PreparedStatement ps = conn.prepareStatement("SELECT * FROM users WHERE username=? AND password=?");
+                ps.setString(1, u); ps.setString(2, p);
+                ResultSet rs = ps.executeQuery();
+                if (rs.next()) {
+                    loggedUserRole = rs.getString("role"); loggedUsername = u;
+                    if (loggedUserRole.equals("ADMIN")) { loadAdminData(); cardLayout.show(mainPanel, "ADMIN"); }
+                    else if (loggedUserRole.equals("LECTURER")) { loadLecturerData(); cardLayout.show(mainPanel, "LECTURER"); }
+                    else {
+                        PreparedStatement ps2 = conn.prepareStatement("SELECT id FROM students WHERE username=?");
+                        ps2.setString(1, u); ResultSet r2 = ps2.executeQuery(); if(r2.next()) loggedStudentId = r2.getInt(1);
+                        loadStudentData(); cardLayout.show(mainPanel, "STUDENT");
+                    }
+                } else JOptionPane.showMessageDialog(this, "Wrong Username or Password!");
+            } catch (Exception ex) { ex.printStackTrace(); }
+        });
+    }
+
+    // ===== ADMIN UI =====
+    JTable adminStudentTable, adminCourseTable;
+    void initAdminUI() {
+        adminPanel = new JPanel(new BorderLayout());
+        JTabbedPane tabs = new JTabbedPane();
+
+        // Students Tab
+        JPanel sPanel = new JPanel(new BorderLayout());
+        adminStudentTable = new JTable(); sPanel.add(new JScrollPane(adminStudentTable), BorderLayout.CENTER);
+        JPanel sForm = new JPanel(); JTextField reg = new JTextField(8); JTextField name = new JTextField(8);
+         JTextField user = new JTextField(6); JTextField prog = new JTextField(4);
+        JButton addS = new JButton("Add Student"); sForm.add(new JLabel("RegNo:")); sForm.add(reg);
+         sForm.add(new JLabel("Name:")); sForm.add(name); sForm.add(new JLabel("User:")); sForm.add(user); sForm.add(new JLabel("Prog:"));
+          sForm.add(prog); sForm.add(addS);
+        sPanel.add(sForm, BorderLayout.SOUTH);
+        addS.addActionListener(e -> { try{ PreparedStatement ps=conn.prepareStatement("INSERT INTO students(regNo,fullName,username,program)
+         VALUES(?,?,?,?)"); ps.setString(1,reg.getText()); ps.setString(2,name.getText()); ps.setString(3,user.getText());
+          ps.setString(4,prog.getText()); ps.executeUpdate(); loadAdminData(); 
+          }catch(Exception ex){JOptionPane.showMessageDialog(this, ex.getMessage());} });
+
+        // Courses Tab
+        JPanel cPanel = new JPanel(new BorderLayout());
+        adminCourseTable = new JTable(); cPanel.add(new JScrollPane(adminCourseTable), BorderLayout.CENTER);
+        JPanel cForm = new JPanel(); JTextField code = new JTextField(6); JTextField cName = new JTextField(10);
+         JTextField lec = new JTextField(8); JButton addC = new JButton("Add Course");
+        cForm.add(new JLabel("Code:")); cForm.add(code); cForm.add(new JLabel("Name:")); cForm.add(cName); cForm.add(new JLabel("Lecturer:"));
+         cForm.add(lec); cForm.add(addC);
+        cPanel.add(cForm, BorderLayout.SOUTH);
+        addC.addActionListener(e -> { try{ PreparedStatement ps=conn.prepareStatement("INSERT INTO courses(code,name,lecturer) VALUES(?,?,?)");
+         ps.setString(1,code.getText()); ps.setString(2,cName.getText()); ps.setString(3,lec.getText()); ps.executeUpdate(); loadAdminData(); 
+         }catch(Exception ex){JOptionPane.showMessageDialog(this, ex.getMessage());} });
+
+        tabs.addTab("Manage Students", sPanel); tabs.addTab("Manage Courses", cPanel);
+        adminPanel.add(tabs, BorderLayout.CENTER);
+        JButton logout = new JButton("Logout"); logout.addActionListener(e->cardLayout.show(mainPanel,"LOGIN"));
+         adminPanel.add(logout, BorderLayout.SOUTH);
+    }
+
+    void loadAdminData() {
+        try {
+            adminStudentTable.setModel(buildTableModel(conn.createStatement().executeQuery
+            ("SELECT regNo, fullName, username, program FROM students")));
+            adminCourseTable.setModel(buildTableModel(conn.createStatement().executeQuery("SELECT code, name, lecturer FROM courses")));
+        } catch(Exception e){e.printStackTrace();}
+    }
+
+    // ===== LECTURER UI =====
+    JTable lecturerResultTable;
+    void initLecturerUI() {
+        lecturerPanel = new JPanel(new BorderLayout());
+        lecturerResultTable = new JTable();
+        JPanel top = new JPanel(); JTextField studIdF = new JTextField(4); JTextField courseF = new JTextField(6);
+         JTextField cwF = new JTextField(4); JTextField examF = new JTextField(4);
+        JButton save = new JButton("Save Result (Auto Grade)"); JButton attendBtn = new JButton("Mark Attendance");
+        top.add(new JLabel("Stud ID:")); top.add(studIdF); top.add(new JLabel("Course:")); top.add(courseF); top.add(new JLabel("CW/40:"));
+         top.add(cwF); top.add(new JLabel("Exam/60:")); top.add(examF); top.add(save); top.add(attendBtn);
+        lecturerPanel.add(top, BorderLayout.NORTH); lecturerPanel.add(new JScrollPane(lecturerResultTable), BorderLayout.CENTER);
+        JButton logout = new JButton("Logout"); logout.addActionListener(e->cardLayout.show(mainPanel,"LOGIN"));
+         lecturerPanel.add(logout, BorderLayout.SOUTH);
+
+        save.addActionListener(e -> {
+            try{
+                double cw = Double.parseDouble(cwF.getText()); double ex = Double.parseDouble(examF.getText()); double total = cw+ex;
+                String grade; double gpa; if(total>=80){grade="A"; gpa=5;} else if(total>=70){grade="B"; gpa=4;} else if(total>=60){grade="C"; gpa=3;} else if(total>=50){grade="D"; gpa=2;} else{grade="F"; gpa=0;}
+                PreparedStatement ps = conn.prepareStatement("INSERT INTO results(student_id, course_code, coursework, exam, total, grade, gpa) VALUES(?,?,?,?,?,?,?)");
+                ps.setInt(1,Integer.parseInt(studIdF.getText())); ps.setString(2,courseF.getText()); ps.setDouble(3,cw); ps.setDouble(4,ex); ps.setDouble(5,total); ps.setString(6,grade); ps.setDouble(7,gpa); ps.executeUpdate();
+                loadLecturerData(); JOptionPane.showMessageDialog(this, "Result Saved! Grade: "+grade);
+            }catch(Exception ex){JOptionPane.showMessageDialog(this, "Error: "+ex.getMessage());}
+        });
+        attendBtn.addActionListener(e -> {
+            try{
+                PreparedStatement ps = conn.prepareStatement("INSERT INTO attendance(student_id, course_code, date, status) VALUES(?,?,?,?)");
+                ps.setInt(1,Integer.parseInt(studIdF.getText())); ps.setString(2,courseF.getText()); ps.setDate
+                (3, Date.valueOf(LocalDate.now())); ps.setString(4,"PRESENT"); ps.executeUpdate();
+                JOptionPane.showMessageDialog(this, "Attendance Marked PRESENT");
+            }catch(Exception ex){JOptionPane.showMessageDialog(this, ex.getMessage());}
+        });
+    }
+    void loadLecturerData(){ try{ lecturerResultTable.setModel(buildTableModel
+    (conn.createStatement().executeQuery("SELECT r.student_id, s.fullName, r.course_code, r.coursework, r.exam, r.total,
+     r.grade FROM results r JOIN students s ON r.student_id=s.id"))); }catch(Exception e){} }
+
+    // ===== STUDENT UI =====
+    JTable studentTable; JLabel gpaLabel;
+    void initStudentUI() {
+        studentPanel = new JPanel(new BorderLayout());
+        gpaLabel = new JLabel("GPA: 0.0", SwingConstants.CENTER); gpaLabel.setFont(new Font("Arial", Font.BOLD, 20));
+        studentTable = new JTable();
+        studentPanel.add(gpaLabel, BorderLayout.NORTH); studentPanel.add(new JScrollPane(studentTable), BorderLayout.CENTER);
+        JPanel south = new JPanel(); JButton transBtn = new JButton("Print Transcript"); JButton logout = new JButton("Logout");
+        south.add(transBtn); south.add(logout); studentPanel.add(south, BorderLayout.SOUTH);
+        logout.addActionListener(e->cardLayout.show(mainPanel,"LOGIN"));
+        transBtn.addActionListener(e-> JOptionPane.showMessageDialog
+        (this, "Transcript Printed! GPA: "+gpaLabel.getText()+"\nUse Ctrl+P to save as PDF"));
+    }
+    void loadStudentData(){
+        try{
+            ResultSet rs = conn.createStatement().executeQuery
+            ("SELECT course_code, coursework, exam, total, grade, gpa FROM results WHERE student_id="+loggedStudentId);
+            studentTable.setModel(buildTableModel(rs));
+            ResultSet rs2 = conn.createStatement().executeQuery("SELECT AVG(gpa) as avgGpa FROM results WHERE student_id="+loggedStudentId);
+            if(rs2.next()) gpaLabel.setText("GPA: " + String.format("%.2f", rs2.getDouble("avgGpa")) + " | Student: " + loggedUsername);
+        }catch(Exception e){e.printStackTrace();}
+    }
+
+    // Helper to convert ResultSet to TableModel
+    public static DefaultTableModel buildTableModel(ResultSet rs) throws SQLException {
+        ResultSetMetaData meta = rs.getMetaData(); int cols = meta.getColumnCount();
+        String[] colNames = new String[cols]; for(int i=1;i<=cols;i++) colNames[i-1]=meta.getColumnLabel(i);
+        DefaultTableModel model = new DefaultTableModel(colNames,0);
+        while(rs.next()){ Object[] row=new Object[cols]; for(int i=1;i<=cols;i++) row[i-1]=rs.getObject(i); model.addRow(row); }
+        return model;
+    }
+
+    public static void main(String[] args) { 
+        SwingUtilities.invokeLater(() -> new SmartCampusSystem().setVisible(true)); }
+}
